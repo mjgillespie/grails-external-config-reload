@@ -2,6 +2,7 @@ package grails.plugins.reloadconfig
 
 import org.codehaus.groovy.grails.plugins.GrailsPlugin
 import grails.util.Environment
+import java.security.MessageDigest
 
 class ReloadConfigService {
 	def pluginManager
@@ -37,8 +38,8 @@ class ReloadConfigService {
 		// Check for changes
 		def changed = []
 		files?.each { String fileName ->
-			if (fileName.contains("file:"))
-				fileName = fileName.substring(fileName.indexOf(':')+1)
+			fileName = processFileName(fileName)
+				
 			File configFile = new File(fileName).absoluteFile
 			log.trace("Checking external config file location ${configFile} for changes since ${lastTimeChecked}...")
 			if (configFile.exists() && configFile.lastModified()>lastTimeChecked.time) {
@@ -76,8 +77,8 @@ class ReloadConfigService {
 	def reloadNow() {
 		log.info("Manual reload of configuration files triggered")
 		files?.each { String fileName ->
-			if (fileName.contains("file:"))
-				fileName = fileName.substring(fileName.indexOf(':')+1)
+			fileName = processFileName(fileName)
+			
 			File configFile = new File(fileName).absoluteFile
 			if (configFile.exists()) {
 				if (automerge) {
@@ -108,5 +109,55 @@ class ReloadConfigService {
 		lastTimeChecked = new Date();
 		notifyPlugins();
 	}
+	
+	private String processFileName(String fileName) {
+		if (fileName.startsWith('url')) {
+			String tempdir = System.getProperty("java.io.tmpdir")
+			String url = fileName.substring(fileName.indexOf(':')+1)			
+			
+			def fileExension = fileName.substring(fileName.lastIndexOf('.')+1)
+			def file = File.createTempFile('ConfigLoad', fileExension)
+			def fileStream = file.newOutputStream()
+			fileStream << new URL(url).openStream()
+			fileStream.close()
+			
+			def md5UrlHash = md5(url)		
+			def md5hash = md5(file)
+					
+			String configFileName = "${md5UrlHash}.${md5hash}.${fileExension}"
+			File urlConfigFile = new File(tempdir, configFileName)
+			
+			if (!urlConfigFile.exists()) {
+				// The file has not been found
+				// get all files file md5UrlHash.*.extension
+				def pattern = ~"${md5UrlHash}.*.${fileExension}"
+				new File( tempdir ).eachFileMatch(pattern) { f->
+					f.delete()
+				}
+				file.renameTo(urlConfigFile.absolutePath)
+			}
+			
+			fileName = urlConfigFile.absolutePath
+		}
+		
+		if (fileName.contains("file:")) {
+			fileName = fileName.substring(fileName.indexOf(':')+1)
+		}
+			
+		fileName
+	}
+	
+	def md5( obj ) {
+		def hash = MessageDigest.getInstance( 'MD5' ).with {
+			if (obj instanceof String) {
+				obj = new ByteArrayInputStream(obj.getBytes("UTF-8"))
+			}
+			obj.eachByte( 8192 ) { bfr, num ->
+				update bfr, 0, num
+			}
+			it.digest()
+		}
+		new BigInteger( 1, hash ).toString( 16 ).padLeft( 32, '0' )
+	}
+	
 }
-
